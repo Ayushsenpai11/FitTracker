@@ -1,4 +1,60 @@
 
+/* Fix bright white dashboard cards */
+#root main > section:nth-of-type(2) > div {
+  background: rgba(20, 39, 62, 0.78) !important;
+  border: 1px solid rgba(148, 210, 220, 0.22) !important;
+  border-radius: 20px !important;
+  color: #f1f7ff !important;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.18) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+#root main > section:nth-of-type(2) > div p {
+  color: #c0d1e5 !important;
+}
+
+#root main > section:nth-of-type(2) > div h2 {
+  color: #5eead4 !important;
+}
+
+/* Improve contrast throughout the app */
+#root main > section {
+  background: rgba(19, 35, 57, 0.72) !important;
+  color: #f1f7ff !important;
+}
+
+#root main > section h2,
+#root main > section label {
+  color: #f1f7ff !important;
+}
+
+#root main > section p,
+#root main > section small {
+  color: #c0d1e5 !important;
+}
+
+/* Keep form fields dark and readable */
+#root input,
+#root textarea,
+#root select {
+  background: rgba(5, 15, 29, 0.85) !important;
+  color: #f8fafc !important;
+  border: 1px solid rgba(148, 210, 220, 0.25) !important;
+}
+
+/* Make workout tables consistent with the theme */
+#root table {
+  background: transparent !important;
+  color: #f1f7ff !important;
+}
+
+#root th,
+#root td {
+  color: #dce8f6 !important;
+  border-color: rgba(148, 210, 220, 0.16) !important;
+}
+
 /* =========================================
    FITTRACK — GLASSMORPHISM THEME
    Existing React functionality is preserved
