@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 
-const API_URL = "http://localhost:5000/api";
+const API_URL = "https://fittracker-api-bzjs.onrender.com/api";
 
 const initialWorkout = {
   exercise: "",
