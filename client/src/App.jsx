@@ -1,44 +1,52 @@
-
-import React, { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import "./index.css";
 
 const API_URL = "https://fittracker-api-bzjs.onrender.com/api";
+const blankWorkout = () => ({ exercise: "", duration: "", calories: "", date: new Date().toISOString().slice(0, 10) });
+const blankSummary = { totalWorkouts: 0, totalMinutes: 0, totalCalories: 0 };
 
-const initialWorkout = {
-  exercise: "",
-  duration: "",
-  calories: "",
-  date: new Date().toISOString().slice(0, 10),
-};
+function localDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function lastSevenDays(workouts) {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  return Array.from({ length: 7 }, (_, i) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - i));
+    const key = localDateKey(date);
+    const matching = workouts.filter((w) => w.date === key);
+    return {
+      key,
+      label: date.toLocaleDateString("en", { weekday: "short" }),
+      minutes: matching.reduce((sum, w) => sum + Number(w.duration || 0), 0),
+    };
+  });
+}
+function prettyDate(value) {
+  if (!value) return "—";
+  const date = new Date(`${value}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric" });
+}
 
 export default function App() {
-  const [token, setToken] = useState(
-    () => localStorage.getItem("fittrack_token") || ""
-  );
+  const [token, setToken] = useState(() => localStorage.getItem("fittrack_token") || "");
   const [user, setUser] = useState(null);
   const [workouts, setWorkouts] = useState([]);
-  const [summary, setSummary] = useState({
-    totalWorkouts: 0,
-    totalMinutes: 0,
-    totalCalories: 0,
-  });
-
+  const [summary, setSummary] = useState(blankSummary);
   const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-
-  const [authForm, setAuthForm] = useState({
-    name: "",
-    email: "",
-    password: "",
-  });
-
-  const [workoutForm, setWorkoutForm] = useState(initialWorkout);
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [workoutForm, setWorkoutForm] = useState(blankWorkout);
   const [editingId, setEditingId] = useState(null);
+  const [activeNav, setActiveNav] = useState("dashboard");
 
-  const apiRequest = useCallback(
-    async (path, options = {}) => {
-      const response = await fetch(`${API_URL}${path}`, {
+  const apiRequest = useCallback(async (path, options = {}) => {
+    let response;
+    try {
+      response = await fetch(`${API_URL}${path}`, {
         ...options,
         headers: {
           "Content-Type": "application/json",
@@ -46,621 +54,215 @@ export default function App() {
           ...options.headers,
         },
       });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data.message || "Request failed");
-      }
-
-      return data;
-    },
-    [token]
-  );
+    } catch {
+      throw new Error("Could not reach the server. Please try again in a moment.");
+    }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || "Request failed");
+    return data;
+  }, [token]);
 
   const loadDashboard = useCallback(async () => {
-    const [profileData, workoutData, dashboardData] = await Promise.all([
-      apiRequest("/profile"),
-      apiRequest("/workouts"),
-      apiRequest("/dashboard"),
+    const [profile, workoutData, dashboard] = await Promise.all([
+      apiRequest("/profile"), apiRequest("/workouts"), apiRequest("/dashboard"),
     ]);
-
-    setUser(profileData.user);
-    setWorkouts(workoutData.workouts);
-    setSummary(dashboardData.summary);
+    setUser(profile.user);
+    setWorkouts(Array.isArray(workoutData.workouts) ? workoutData.workouts : []);
+    setSummary(dashboard.summary || blankSummary);
   }, [apiRequest]);
 
   useEffect(() => {
-    if (!token) return;
-
+    if (!token) return undefined;
     let cancelled = false;
-
-    async function loadData() {
+    (async () => {
       try {
-        const [profileData, workoutData, dashboardData] =
-          await Promise.all([
-            apiRequest("/profile"),
-            apiRequest("/workouts"),
-            apiRequest("/dashboard"),
-          ]);
-
+        const [profile, workoutData, dashboard] = await Promise.all([
+          apiRequest("/profile"), apiRequest("/workouts"), apiRequest("/dashboard"),
+        ]);
         if (cancelled) return;
-
-        setUser(profileData.user);
-        setWorkouts(workoutData.workouts);
-        setSummary(dashboardData.summary);
+        setUser(profile.user);
+        setWorkouts(Array.isArray(workoutData.workouts) ? workoutData.workouts : []);
+        setSummary(dashboard.summary || blankSummary);
         setError("");
       } catch (err) {
         if (cancelled) return;
-
         localStorage.removeItem("fittrack_token");
         setToken("");
         setUser(null);
         setError(err.message);
       }
-    }
-
-    loadData();
-
-    return () => {
-      cancelled = true;
-    };
+    })();
+    return () => { cancelled = true; };
   }, [token, apiRequest]);
 
-  function handleAuthChange(event) {
-    const { name, value } = event.target;
+  const week = useMemo(() => lastSevenDays(workouts), [workouts]);
+  const maxMinutes = Math.max(30, ...week.map((day) => day.minutes));
 
-    setAuthForm((previous) => ({
-      ...previous,
-      [name]: value,
-    }));
+  function handleAuthChange(e) {
+    setAuthForm((old) => ({ ...old, [e.target.name]: e.target.value }));
   }
-
-  function handleWorkoutChange(event) {
-    const { name, value } = event.target;
-
-    setWorkoutForm((previous) => ({
-      ...previous,
-      [name]: value,
-    }));
+  function handleWorkoutChange(e) {
+    setWorkoutForm((old) => ({ ...old, [e.target.name]: e.target.value }));
   }
-
-  async function handleAuthSubmit(event) {
-    event.preventDefault();
-    setLoading(true);
-    setError("");
-    setMessage("");
-
+  async function handleAuthSubmit(e) {
+    e.preventDefault(); setLoading(true); setError(""); setMessage("");
     try {
-      const endpoint =
-        mode === "register" ? "/register" : "/login";
-
-      const data = await apiRequest(endpoint, {
-        method: "POST",
-        body: JSON.stringify(authForm),
+      const data = await apiRequest(mode === "register" ? "/register" : "/login", {
+        method: "POST", body: JSON.stringify(authForm),
       });
-
       if (mode === "register") {
         setMode("login");
-        setAuthForm({
-          name: "",
-          email: authForm.email,
-          password: "",
-        });
+        setAuthForm({ name: "", email: authForm.email, password: "" });
         setMessage("Account created successfully. Please log in.");
       } else {
         localStorage.setItem("fittrack_token", data.token);
-        setToken(data.token);
-        setUser(data.user);
-        setMessage("Welcome to FitTrack!");
+        setToken(data.token); setUser(data.user);
         setAuthForm({ name: "", email: "", password: "" });
+        setMessage("Welcome to FitTrack!");
       }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
   }
-
-  async function handleWorkoutSubmit(event) {
-    event.preventDefault();
-    setError("");
-    setMessage("");
-
+  async function handleWorkoutSubmit(e) {
+    e.preventDefault(); setError(""); setMessage("");
     const duration = Number(workoutForm.duration);
     const calories = Number(workoutForm.calories || 0);
-
-    if (
-      !Number.isInteger(duration) ||
-      duration < 0 ||
-      !Number.isInteger(calories) ||
-      calories < 0
-    ) {
-      setError("Duration and calories must be non-negative whole numbers.");
-      return;
+    if (!workoutForm.exercise.trim() || !Number.isInteger(duration) || duration < 0 || duration > 1440 ||
+        !Number.isInteger(calories) || calories < 0 || calories > 100000) {
+      setError("Enter an exercise, a duration from 0–1440 minutes, and valid calories."); return;
     }
-
     setLoading(true);
-
     try {
-      const payload = {
-        ...workoutForm,
-        duration,
-        calories,
-      };
-
+      const payload = { ...workoutForm, exercise: workoutForm.exercise.trim(), duration, calories };
       if (editingId !== null) {
-        await apiRequest(`/workouts/${editingId}`, {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        });
-        setMessage("Workout updated successfully!");
+        await apiRequest(`/workouts/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+        setMessage("Workout updated successfully.");
       } else {
-        await apiRequest("/workouts", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        setMessage("Workout added successfully!");
+        await apiRequest("/workouts", { method: "POST", body: JSON.stringify(payload) });
+        setMessage("Workout added successfully.");
       }
-
-      setWorkoutForm(initialWorkout);
-      setEditingId(null);
-      await loadDashboard();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+      setWorkoutForm(blankWorkout()); setEditingId(null); await loadDashboard();
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
   }
-
   function handleEdit(workout) {
-    setWorkoutForm({
-      exercise: workout.exercise,
-      duration: String(workout.duration),
-      calories: String(workout.calories),
-      date: workout.date,
-    });
-    setEditingId(workout.id);
-    setError("");
-    setMessage("");
-
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setWorkoutForm({ exercise: workout.exercise, duration: String(workout.duration), calories: String(workout.calories), date: workout.date });
+    setEditingId(workout.id); setError(""); setMessage("");
+    document.getElementById("add-workout")?.scrollIntoView({ behavior: "smooth" });
   }
-
   async function handleDeleteWorkout(id) {
-    if (!window.confirm("Are you sure you want to delete this workout?")) {
-      return;
-    }
-
-    setError("");
-    setMessage("");
-
+    if (!window.confirm("Are you sure you want to delete this workout?")) return;
+    setError(""); setMessage("");
     try {
       await apiRequest(`/workouts/${id}`, { method: "DELETE" });
-      await loadDashboard();
-      setMessage("Workout deleted successfully!");
-
-      if (editingId === id) {
-        cancelEdit();
-      }
-    } catch (err) {
-      setError(err.message);
-    }
+      await loadDashboard(); setMessage("Workout deleted successfully.");
+      if (editingId === id) cancelEdit();
+    } catch (err) { setError(err.message); }
   }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setWorkoutForm(initialWorkout);
-  }
-
+  function cancelEdit() { setEditingId(null); setWorkoutForm(blankWorkout()); }
   function handleLogout() {
-    localStorage.removeItem("fittrack_token");
-    setToken("");
-    setUser(null);
-    setWorkouts([]);
-    setSummary({
-      totalWorkouts: 0,
-      totalMinutes: 0,
-      totalCalories: 0,
-    });
-    setAuthForm({ name: "", email: "", password: "" });
-    setError("");
-    setMessage("");
-    setMode("login");
-    cancelEdit();
+    localStorage.removeItem("fittrack_token"); setToken(""); setUser(null); setWorkouts([]);
+    setSummary(blankSummary); setAuthForm({ name: "", email: "", password: "" });
+    setError(""); setMessage(""); setMode("login"); cancelEdit();
+  }
+  function goTo(id) {
+    setActiveNav(id);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  const styles = {
-    page: {
-      minHeight: "100vh",
-      background: "#f3f6fb",
-      fontFamily: "Arial, sans-serif",
-      color: "#172033",
-    },
-    header: {
-      background: "#14213d",
-      color: "#fff",
-      padding: "20px 6%",
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      gap: 12,
-      flexWrap: "wrap",
-    },
-    main: {
-      width: "88%",
-      maxWidth: 1100,
-      margin: "30px auto",
-    },
-    card: {
-      background: "#fff",
-      padding: 22,
-      borderRadius: 14,
-      boxShadow: "0 4px 16px rgba(0,0,0,0.05)",
-      marginBottom: 22,
-    },
-    input: {
-      display: "block",
-      width: "100%",
-      boxSizing: "border-box",
-      padding: 12,
-      marginTop: 6,
-      marginBottom: 16,
-      border: "1px solid #d7deea",
-      borderRadius: 8,
-      fontSize: 15,
-    },
-    button: {
-      padding: "11px 17px",
-      background: "#2563eb",
-      color: "#fff",
-      border: "none",
-      borderRadius: 8,
-      cursor: "pointer",
-      fontWeight: "bold",
-    },
-    grid: {
-      display: "grid",
-      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-      gap: 16,
-    },
-  };
+  return <div className="app-shell">
+    <header className="topbar">
+      <a className="brand" href="#dashboard" onClick={() => setActiveNav("dashboard")}>
+        <span className="brand-mark">✦</span><span><strong>FitTrack</strong><small>Your fitness, your progress.</small></span>
+      </a>
+      {token ? <div className="topbar-actions"><span className="online-pill"><i /> Ready to move</span><button className="button button-quiet" onClick={handleLogout}>Log out</button></div> : <span className="secure-note">Your personal fitness space</span>}
+    </header>
 
-  return (
-    <div style={styles.page}>
-      <header style={styles.header}>
-        <div>
-          <h1 style={{ margin: 0 }}>💪 FitTrack</h1>
-          <small>Your fitness, your progress.</small>
+    <main className="page-content">
+      {(error || message) && <div className={`notice ${error ? "notice-error" : "notice-success"}`} role="status">
+        <span>{error ? "!" : "✓"}</span><p>{error || message}</p>
+        <button className="notice-dismiss" aria-label="Dismiss message" onClick={() => { setError(""); setMessage(""); }}>×</button>
+      </div>}
+
+      {!token ? <section className="auth-layout">
+        <div className="auth-promo">
+          <span className="eyebrow">YOUR JOURNEY STARTS HERE</span>
+          <h1>Small steps.<br /><span>Stronger you.</span></h1>
+          <p>Build healthy habits, track every session, and celebrate your progress one workout at a time.</p>
+          <div className="promo-points"><div><b>✓</b> Personal workout tracking</div><div><b>✓</b> Progress at a glance</div><div><b>✓</b> Your fitness journey, organized</div></div>
+          <div className="orb orb-one" /><div className="orb orb-two" />
         </div>
+        <section className="glass-panel auth-card">
+          <span className="eyebrow">{mode === "login" ? "WELCOME BACK" : "GET STARTED"}</span>
+          <h2>{mode === "login" ? "Sign in to FitTrack" : "Create your account"}</h2>
+          <p className="muted">{mode === "login" ? "Pick up where you left off." : "Your fitness journey starts with one step."}</p>
+          <form onSubmit={handleAuthSubmit}>
+            {mode === "register" && <label>Full name<input name="name" value={authForm.name} onChange={handleAuthChange} autoComplete="name" placeholder="Your name" maxLength={100} required /></label>}
+            <label>Email address<input name="email" type="email" value={authForm.email} onChange={handleAuthChange} autoComplete="email" placeholder="you@example.com" required /></label>
+            <label>Password<input name="password" type="password" minLength={6} value={authForm.password} onChange={handleAuthChange} autoComplete={mode === "login" ? "current-password" : "new-password"} placeholder="At least 6 characters" required /></label>
+            <button className="button button-primary button-wide" type="submit" disabled={loading}>{loading ? "Please wait…" : mode === "login" ? "Sign in →" : "Create account →"}</button>
+          </form>
+          <p className="auth-switch">{mode === "login" ? "New to FitTrack?" : "Already have an account?"}
+            <button type="button" className="text-button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); setMessage(""); }}>{mode === "login" ? "Create account" : "Sign in"}</button>
+          </p>
+        </section>
+      </section> : <>
+        <nav className="section-nav" aria-label="Main navigation">
+          <button className={activeNav === "dashboard" ? "nav-link active" : "nav-link"} onClick={() => goTo("dashboard")}>▦ <span>Dashboard</span></button>
+          <button className={activeNav === "weekly-activity" ? "nav-link active" : "nav-link"} onClick={() => goTo("weekly-activity")}>↗ <span>Activity</span></button>
+          <button className={activeNav === "add-workout" ? "nav-link active" : "nav-link"} onClick={() => goTo("add-workout")}>＋ <span>Add workout</span></button>
+          <button className={activeNav === "workout-history" ? "nav-link active" : "nav-link"} onClick={() => goTo("workout-history")}>◷ <span>History</span></button>
+          <div className="nav-spacer" /><span className="user-chip"><i>{(user?.name || "F").slice(0, 1).toUpperCase()}</i>{user?.name || "Fitness user"}</span>
+        </nav>
 
-        {token && (
-          <button style={styles.button} onClick={handleLogout}>
-            Logout
-          </button>
-        )}
-      </header>
-
-      <main style={styles.main}>
-        {(error || message) && (
-          <div
-            role="status"
-            style={{
-              ...styles.card,
-              color: error ? "#b91c1c" : "#15803d",
-              padding: 14,
-            }}
-          >
-            {error || message}
+        <section className="hero-panel glass-panel" id="dashboard">
+          <div className="hero-copy"><span className="eyebrow">YOUR PERSONAL DASHBOARD</span>
+            <h1>Hello, {user?.name || "Fitness enthusiast"} <span className="wave">👋</span></h1>
+            <p>Keep moving. Every workout counts.</p><span className="hero-email">{user?.email}</span>
           </div>
-        )}
+          <div className="hero-decoration" aria-hidden="true"><div className="hero-ring" /><div className="hero-ring ring-two" /><div className="hero-bolt">↗</div></div>
+          <div className="hero-bottom"><i /> Your progress, all in one place</div>
+        </section>
 
-        {!token ? (
-          <section
-            style={{
-              ...styles.card,
-              maxWidth: 440,
-              margin: "40px auto",
-            }}
-          >
-            <h2>
-              {mode === "login" ? "Welcome Back" : "Create Account"}
-            </h2>
+        <section className="stats-grid" aria-label="Fitness summary">
+          <article className="stat-card glass-panel"><div className="stat-top"><span className="stat-icon icon-teal">↗</span><span className="stat-trend">LIFETIME</span></div><p>Total workouts</p><h2>{summary.totalWorkouts ?? 0}</h2><small>Sessions completed</small></article>
+          <article className="stat-card glass-panel"><div className="stat-top"><span className="stat-icon icon-blue">◷</span><span className="stat-trend">LIFETIME</span></div><p>Active minutes</p><h2>{summary.totalMinutes ?? 0}<span> min</span></h2><small>Time spent moving</small></article>
+          <article className="stat-card glass-panel"><div className="stat-top"><span className="stat-icon icon-orange">ϟ</span><span className="stat-trend">LIFETIME</span></div><p>Calories burned</p><h2>{summary.totalCalories ?? 0}<span> kcal</span></h2><small>Energy logged</small></article>
+        </section>
 
-            <p>
-              {mode === "login"
-                ? "Log in to track your fitness journey."
-                : "Create an account to get started."}
-            </p>
-
-            <form onSubmit={handleAuthSubmit}>
-              {mode === "register" && (
-                <>
-                  <label htmlFor="name">Full name</label>
-                  <input
-                    id="name"
-                    style={styles.input}
-                    name="name"
-                    value={authForm.name}
-                    onChange={handleAuthChange}
-                    autoComplete="name"
-                    required
-                  />
-                </>
-              )}
-
-              <label htmlFor="email">Email address</label>
-              <input
-                id="email"
-                style={styles.input}
-                name="email"
-                type="email"
-                value={authForm.email}
-                onChange={handleAuthChange}
-                autoComplete="email"
-                required
-              />
-
-              <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                style={styles.input}
-                name="password"
-                type="password"
-                minLength={6}
-                value={authForm.password}
-                onChange={handleAuthChange}
-                autoComplete={
-                  mode === "login" ? "current-password" : "new-password"
-                }
-                required
-              />
-
-              <button
-                type="submit"
-                style={{
-                  ...styles.button,
-                  opacity: loading ? 0.7 : 1,
-                }}
-                disabled={loading}
-              >
-                {loading
-                  ? "Please wait..."
-                  : mode === "login"
-                    ? "Login"
-                    : "Register"}
-              </button>
-            </form>
-
-            <p>
-              {mode === "login"
-                ? "Don't have an account?"
-                : "Already have an account?"}{" "}
-              <button
-                type="button"
-                onClick={() => {
-                  setMode(mode === "login" ? "register" : "login");
-                  setError("");
-                  setMessage("");
-                }}
-                style={{
-                  border: "none",
-                  background: "none",
-                  color: "#2563eb",
-                  cursor: "pointer",
-                }}
-              >
-                {mode === "login" ? "Register" : "Login"}
-              </button>
-            </p>
+        <section className="content-grid">
+          <section className="glass-panel chart-panel" id="weekly-activity">
+            <div className="panel-heading"><div><span className="eyebrow">CONSISTENCY COUNTS</span><h2>Weekly activity</h2></div><span className="heading-badge">LAST 7 DAYS</span></div>
+            <div className="chart-summary"><strong>{week.reduce((sum, day) => sum + day.minutes, 0)} <span>min</span></strong><span>recorded this week</span></div>
+            <div className="activity-chart" role="img" aria-label="Active minutes for the last seven days">
+              {week.map((day) => <div className="chart-day" key={day.key}><span className="chart-value">{day.minutes || "—"}</span><div className="bar-track"><div className="bar-fill" style={{ height: `${day.minutes ? Math.max(8, day.minutes / maxMinutes * 100) : 3}%` }} /></div><span className="chart-day-label">{day.label}</span></div>)}
+            </div>
+            <p className="chart-footnote">Bars show workout minutes logged each day.</p>
           </section>
-        ) : (
-          <>
-            <section style={styles.card}>
-              <h2>Hello, {user?.name || "Fitness Enthusiast"}! 👋</h2>
-              <p>Keep moving. Every workout counts.</p>
-              <small>{user?.email}</small>
-            </section>
 
-            <section style={styles.grid}>
-              {[
-                {
-                  title: "Total Workouts",
-                  value: summary.totalWorkouts,
-                  unit: "",
-                  icon: "🏋️",
-                },
-                {
-                  title: "Active Minutes",
-                  value: summary.totalMinutes,
-                  unit: "min",
-                  icon: "⏱️",
-                },
-                {
-                  title: "Calories Burned",
-                  value: summary.totalCalories,
-                  unit: "kcal",
-                  icon: "🔥",
-                },
-              ].map((item) => (
-                <div key={item.title} style={styles.card}>
-                  <div style={{ fontSize: 27 }}>{item.icon}</div>
-                  <p>{item.title}</p>
-                  <h2 style={{ marginBottom: 0 }}>
-                    {item.value} {item.unit}
-                  </h2>
-                </div>
-              ))}
-            </section>
+          <section className="glass-panel quick-panel" id="add-workout">
+            <div className="panel-heading"><div><span className="eyebrow">LOG YOUR SESSION</span><h2>{editingId !== null ? "Edit workout" : "Add workout"}</h2></div><span className="panel-symbol">＋</span></div>
+            <form onSubmit={handleWorkoutSubmit} className="workout-form">
+              <label>Exercise name<input name="exercise" value={workoutForm.exercise} onChange={handleWorkoutChange} placeholder="e.g. Running, cycling, push-ups" maxLength={100} required /></label>
+              <div className="form-row">
+                <label>Duration (min)<input name="duration" type="number" min="0" max="1440" step="1" value={workoutForm.duration} onChange={handleWorkoutChange} placeholder="30" required /></label>
+                <label>Calories (kcal)<input name="calories" type="number" min="0" max="100000" step="1" value={workoutForm.calories} onChange={handleWorkoutChange} placeholder="200" /></label>
+              </div>
+              <label>Workout date<input name="date" type="date" value={workoutForm.date} onChange={handleWorkoutChange} required /></label>
+              <div className="form-actions"><button className="button button-primary" type="submit" disabled={loading}>{loading ? "Saving…" : editingId !== null ? "Save changes →" : "＋ Add workout"}</button>{editingId !== null && <button className="button button-secondary" type="button" onClick={cancelEdit}>Cancel</button>}</div>
+            </form>
+          </section>
+        </section>
 
-            <section style={styles.card}>
-              <h2>{editingId !== null ? "Edit Workout" : "Add Workout"}</h2>
-
-              <form onSubmit={handleWorkoutSubmit}>
-                <label htmlFor="exercise">Exercise name</label>
-                <input
-                  id="exercise"
-                  style={styles.input}
-                  name="exercise"
-                  placeholder="e.g. Running, Cycling, Push-ups"
-                  value={workoutForm.exercise}
-                  onChange={handleWorkoutChange}
-                  required
-                />
-
-                <div style={styles.grid}>
-                  <div>
-                    <label htmlFor="duration">Duration (minutes)</label>
-                    <input
-                      id="duration"
-                      style={styles.input}
-                      name="duration"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={workoutForm.duration}
-                      onChange={handleWorkoutChange}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="calories">Calories burned (kcal)</label>
-                    <input
-                      id="calories"
-                      style={styles.input}
-                      name="calories"
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={workoutForm.calories}
-                      onChange={handleWorkoutChange}
-                    />
-                  </div>
-                </div>
-
-                <label htmlFor="date">Workout date</label>
-                <input
-                  id="date"
-                  style={styles.input}
-                  name="date"
-                  type="date"
-                  value={workoutForm.date}
-                  onChange={handleWorkoutChange}
-                  required
-                />
-
-                <button
-                  type="submit"
-                  style={styles.button}
-                  disabled={loading}
-                >
-                  {loading
-                    ? "Saving..."
-                    : editingId !== null
-                      ? "Update Workout"
-                      : "+ Add Workout"}
-                </button>
-
-                {editingId !== null && (
-                  <button
-                    type="button"
-                    onClick={cancelEdit}
-                    style={{
-                      ...styles.button,
-                      background: "#64748b",
-                      marginLeft: 10,
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </form>
-            </section>
-
-            <section style={styles.card}>
-              <h2>Workout History</h2>
-
-              {workouts.length === 0 ? (
-                <p>No workouts yet. Add your first workout above!</p>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table
-                    style={{
-                      width: "100%",
-                      borderCollapse: "collapse",
-                      textAlign: "left",
-                    }}
-                  >
-                    <thead>
-                      <tr>
-                        {[
-                          "Exercise",
-                          "Duration",
-                          "Calories",
-                          "Date",
-                          "Actions",
-                        ].map((heading) => (
-                          <th
-                            key={heading}
-                            style={{
-                              padding: 12,
-                              borderBottom: "2px solid #e5e7eb",
-                            }}
-                          >
-                            {heading}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {workouts.map((workout) => (
-                        <tr key={workout.id}>
-                          <td style={{ padding: 12 }}>
-                            {workout.exercise}
-                          </td>
-                          <td style={{ padding: 12 }}>
-                            {workout.duration} min
-                          </td>
-                          <td style={{ padding: 12 }}>
-                            {workout.calories} kcal
-                          </td>
-                          <td style={{ padding: 12 }}>{workout.date}</td>
-                          <td style={{ padding: 12, whiteSpace: "nowrap" }}>
-                            <button
-                              type="button"
-                              onClick={() => handleEdit(workout)}
-                              style={{
-                                ...styles.button,
-                                background: "#0f766e",
-                                marginRight: 6,
-                              }}
-                            >
-                              Edit
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteWorkout(workout.id)}
-                              style={{
-                                ...styles.button,
-                                background: "#dc2626",
-                              }}
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-          </>
-        )}
-      </main>
-    </div>
-  );
+        <section className="glass-panel history-panel" id="workout-history">
+          <div className="panel-heading"><div><span className="eyebrow">YOUR JOURNEY SO FAR</span><h2>Workout history</h2></div><span className="heading-badge">{workouts.length} {workouts.length === 1 ? "SESSION" : "SESSIONS"}</span></div>
+          {workouts.length === 0 ? <div className="empty-state"><span className="empty-icon">✦</span><h3>Your first win starts here</h3><p>Add a workout and your activity will appear here.</p><button className="button button-primary" onClick={() => goTo("add-workout")}>Log a workout</button></div> :
+            <div className="table-wrap"><table className="workout-table"><thead><tr><th>Exercise</th><th>Duration</th><th>Calories</th><th>Date</th><th>Actions</th></tr></thead><tbody>
+              {workouts.map((workout) => <tr key={workout.id}><td><span className="exercise-mark">✦</span><strong>{workout.exercise}</strong></td><td>{workout.duration} min</td><td>{workout.calories} kcal</td><td>{prettyDate(workout.date)}</td><td className="table-actions"><button className="button button-small button-secondary" onClick={() => handleEdit(workout)}>Edit</button><button className="button button-small button-danger" onClick={() => handleDeleteWorkout(workout.id)}>Delete</button></td></tr>)}
+            </tbody></table></div>}
+        </section>
+        <footer className="app-footer"><span className="footer-brand">✦ FitTrack</span><span>Progress, not perfection.</span><button className="footer-link" onClick={() => goTo("dashboard")}>Back to top ↑</button></footer>
+      </>}
+    </main>
+  </div>;
 }
