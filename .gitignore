@@ -1,0 +1,10 @@
+
+node_modules/
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+client/node_modules/
+server/node_modules/
